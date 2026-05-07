@@ -1,0 +1,21 @@
+{
+  "name": "@repo/onchain",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./aave": "./src/protocols/aave.ts",
+    "./morpho": "./src/protocols/morpho.ts"
+  },
+  "scripts": { "lint": "eslint src --max-warnings=0" },
+  "dependencies": {
+    "viem": "^2.21.0",
+    "@aave/contract-helpers": "^1.22.0",
+    "@morpho-org/morpho-ts": "^0.1.0"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@repo/auth",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "lint": "eslint src --max-warnings=0" },
+  "dependencies": {
+    "better-auth": "^1.2.0",
+    "@repo/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "typescript": "^5.5.0"
+  }
+}
