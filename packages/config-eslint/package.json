@@ -1,0 +1,11 @@
+{
+  "name": "@repo/eslint-config",
+  "version": "0.0.1",
+  "private": true,
+  "main": "index.js",
+  "type": "module",
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "typescript-eslint": "^7.0.0"
+  }
+}
