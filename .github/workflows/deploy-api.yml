@@ -1,0 +1,71 @@
+# ╔══════════════════════════════════════════════════════════╗
+# ║  DEPLOY API — OIDC → Artifact Registry → Cloud Run       ║
+# ║  Zero static keys. Tokens efimeros por run.               ║
+# ╚══════════════════════════════════════════════════════════╝
+name: DEPLOY_API
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/**'
+      - 'packages/**'
+      - 'Dockerfile'
+      - '.github/workflows/deploy-api.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '9.15.4'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install & build API
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm turbo build --filter=api
+
+      - id: auth
+        name: Authenticate to GCP (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build & Push Docker image
+        run: |
+          REGION="${{ secrets.GCP_REGION }}"
+          PROJECT="${{ secrets.GCP_PROJECT }}"
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/apps/api:${{ github.sha }}"
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+          docker build -f apps/api/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy api \
+            --image "$IMAGE" \
+            --region ${{ secrets.GCP_REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars "NODE_ENV=production" \
+            --memory 512Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 10 \
+            --quiet
