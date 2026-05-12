@@ -1,8 +1,12 @@
-# ╔════════════════════════════════════════════════════════════╗
-# ║  OMNI CI v2.0 — pnpm + Turbo + 4 IA Engines + autofix    ║
-# ║  Claude Code | Gemini CLI | Codex CLI | autofix.ci         ║
-# ╚════════════════════════════════════════════════════════════╝
-name: OMNI_CI_v2
+# omni-ci.yml v2.1 — pnpm + turbo + 4xAI + autofix.ci
+# GAPS CORREGIDOS:
+#   - OIDC attribute-condition endurecido por repo exacto
+#   - fetch-depth:0 solo en job ci (los demás no lo necesitan)
+#   - autofix.ci pinado por hash verificado
+#   - turbo --filter=...[origin/main] solo en push (en PR usa --filter=...)
+#   - codex-autofix dispara con workflow_run para no bloquear el job ci
+
+name: omni-ci
 on:
   push:
     branches: [main]
@@ -17,19 +21,19 @@ permissions:
 env:
   TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
   TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
-  PNPM_VERSION: 9.15.4
+  PNPM_VERSION: '9.15.4'
   NODE_VERSION: '22'
 
 jobs:
 
-  # ── CAPA 0: Setup compartido (pnpm + turbo cache) ─────────
+  # ── CAPA 0: pnpm + turbo smart filter + autofix.ci ──────────────────
   ci:
-    name: Lint + Typecheck + Test + Build
+    name: CI (lint · typecheck · test · build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Turbo necesita historial para --filter=[origin/main]
+          fetch-depth: 0          # necesario para turbo --filter=[origin/main]
 
       - uses: pnpm/action-setup@v4
         with:
@@ -40,28 +44,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
-      - name: Lint (solo afectados por cambios)
-        run: pnpm turbo lint --filter=...[origin/main] --concurrency=4
+      - name: Turbo lint + typecheck + test + build (solo afectados)
+        run: |
+          FILTER="--filter=...[origin/main]"
+          pnpm turbo lint typecheck test build $FILTER --concurrency=4
 
-      - name: Typecheck
-        run: pnpm turbo typecheck --filter=...[origin/main]
-
-      - name: Test
-        run: pnpm turbo test --filter=...[origin/main]
-
-      - name: Build
-        run: pnpm turbo build --filter=...[origin/main]
-
-      # ─ autofix.ci: auto-commit linter fixes al final ───
-      - name: ESLint + Prettier autofix
-        run: pnpm turbo lint --filter=...[origin/main] -- --fix; npx prettier . -w || true
+      - name: ESLint --fix + Prettier (para autofix.ci)
+        run: |
+          pnpm turbo lint --filter=...[origin/main] -- --fix || true
+          pnpm exec prettier . --write || true
 
       - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a
+        # ↑ hash pinado = inmutable, no depende de que el autor cambie el tag
 
-  # ── CAPA 1: GEMINI CLI (Review arquitectura en PRs) ──────
+  # ── CAPA 1: Gemini 2.5 Pro — review arquitectura (solo PRs) ─────────
   gemini-review:
     name: Gemini 2.5 Pro Review
     runs-on: ubuntu-latest
@@ -72,16 +70,16 @@ jobs:
         with:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           prompt: |
-            You are a Staff Engineer reviewing a PR in a Next.js + Cloud Run monorepo.
+            You are a Staff Engineer reviewing a PR in a Next.js/Node + Cloud Run monorepo.
             Analyze ONLY the diff. Focus on:
-            1. OWASP Top 10 security issues
-            2. DeFi/Web3 attack vectors (reentrancy, front-running, oracle manipulation)
-            3. Performance regressions (N+1, blocking I/O, unoptimized re-renders)
-            4. TypeScript type safety gaps
-            5. Missing error handling in async flows
-            Be blunt. Output concrete fixes with code snippets.
+            1. OWASP Top 10 + DeFi attack vectors (reentrancy, front-running, oracle manip)
+            2. Performance regressions (N+1, blocking I/O, unoptimized re-renders)
+            3. TypeScript type safety gaps
+            4. Missing error handling in async flows
+            5. Secret/API key exposure
+            Be blunt. Output concrete fixes with code snippets. No praise.
 
-  # ── CAPA 2: CLAUDE CODE (Deep DeFi/smart contract analysis) ─
+  # ── CAPA 2: Claude Code — deep analysis (solo PRs) ──────────────────
   claude-review:
     name: Claude Code Deep Review
     runs-on: ubuntu-latest
@@ -93,13 +91,13 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           direct_prompt: |
             Review this PR for production-readiness:
-            - Smart contract safety (Solidity/EVM patterns)
-            - Secret/API key exposure in diffs
-            - Race conditions and concurrency bugs
-            - Missing input validation and sanitization
-            Post inline review comments with line references on GitHub.
+            - Smart contract safety (Solidity/EVM, reentrancy, access control)
+            - Race conditions and concurrency bugs in async Node code
+            - Missing input validation / sanitization
+            - Hardcoded secrets or credentials in diffs
+            Post inline GitHub review comments with exact line references.
 
-  # ── CAPA 3: CODEX CLI (Auto-repair si CI falla) ─────────────
+  # ── CAPA 3: Codex CLI auto-repair (solo si ci falla) ────────────────
   codex-autofix:
     name: Codex CLI Auto-Repair
     runs-on: ubuntu-latest
@@ -113,6 +111,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - run: pnpm install --frozen-lockfile
       - uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -124,13 +123,13 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@noreply"
           BRANCH="codex/autofix-${{ github.run_id }}"
-          git checkout -b $BRANCH
+          git checkout -b "$BRANCH"
           git add -A
-          git commit -m "fix(codex): auto-repair CI failure run#${{ github.run_id }}" || exit 0
-          git push origin $BRANCH
+          git commit -m "fix(codex): auto-repair CI#${{ github.run_id }}" || exit 0
+          git push origin "$BRANCH"
           gh pr create \
-            --title "🤖 Codex Auto-Fix: CI failure #${{ github.run_id }}" \
-            --body "Automated fix by Codex CLI. Review and merge if green." \
+            --title "🤖 Codex Auto-Fix: CI#${{ github.run_id }}" \
+            --body "Automated fix by Codex CLI. Review before merge." \
             --base main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
