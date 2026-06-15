@@ -12,7 +12,7 @@
   "dependencies": {
     "viem": "^2.21.0",
     "@aave/contract-helpers": "^1.22.0",
-    "@morpho-org/morpho-ts": "^0.1.0"
+    "@morpho-org/morpho-ts": "^2.6.0"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
