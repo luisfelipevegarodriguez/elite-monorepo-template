@@ -1,4 +1,4 @@
-import type { RpcClient, RpcReceipt } from './rpc-client.js';
+import type { RpcClient, RpcReceipt, RpcTransaction } from './rpc-client.js';
 
 export type IV003Status = 'VERIFIED' | 'BLOCKED_WITH_REASON' | 'INCONCLUSIVE';
 export type IV003Reason =
@@ -9,7 +9,8 @@ export type IV003Reason =
   | 'WRONG_VALUE'
   | 'TX_FAILED'
   | 'INSUFFICIENT_CONFIRMATIONS'
-  | 'USER_BINDING_MISMATCH';
+  | 'USER_BINDING_MISMATCH'
+  | 'TRANSACTION_MISMATCH';
 
 export interface ReceiptPolicy {
   expectedChainId: bigint;
@@ -18,6 +19,7 @@ export interface ReceiptPolicy {
   minConfirmations: bigint;
   expectedUserId: string;
   boundUserId: string;
+  expectedFrom?: string;
 }
 
 export interface ReceiptVerification {
@@ -39,21 +41,34 @@ export async function verifyReceipt(
     return { status: 'BLOCKED_WITH_REASON', reasonCode: 'USER_BINDING_MISMATCH', txHash };
   }
 
+  let chainId: string;
   let receipt: RpcReceipt | null;
+  let transaction: RpcTransaction | null;
   let head: bigint;
   try {
-    [receipt, head] = await Promise.all([rpc.getTransactionReceipt(txHash), rpc.getBlockNumber()]);
+    [chainId, receipt, transaction, head] = await Promise.all([
+      rpc.getChainId(), rpc.getTransactionReceipt(txHash), rpc.getTransactionByHash(txHash), rpc.getBlockNumber(),
+    ]);
   } catch {
     return { status: 'INCONCLUSIVE', reasonCode: 'SOURCE_UNAVAILABLE', txHash };
   }
 
-  if (!receipt) return { status: 'INCONCLUSIVE', reasonCode: 'RECEIPT_NOT_FOUND', txHash };
+  if (hexToBigInt(chainId) !== policy.expectedChainId) {
+    return { status: 'BLOCKED_WITH_REASON', reasonCode: 'WRONG_CHAIN', txHash };
+  }
+  if (!receipt || !transaction) return { status: 'INCONCLUSIVE', reasonCode: 'RECEIPT_NOT_FOUND', txHash };
+  if (normalize(transaction.hash) !== normalize(receipt.transactionHash)) {
+    return { status: 'BLOCKED_WITH_REASON', reasonCode: 'TRANSACTION_MISMATCH', txHash };
+  }
   if (receipt.status !== '0x1') return { status: 'BLOCKED_WITH_REASON', reasonCode: 'TX_FAILED', txHash };
   if (!receipt.to || normalize(receipt.to) !== normalize(policy.expectedRecipient)) {
     return { status: 'BLOCKED_WITH_REASON', reasonCode: 'WRONG_RECIPIENT', txHash };
   }
-  if (receipt.value !== undefined && hexToBigInt(receipt.value) !== policy.expectedValueWei) {
+  if (hexToBigInt(transaction.value) !== policy.expectedValueWei) {
     return { status: 'BLOCKED_WITH_REASON', reasonCode: 'WRONG_VALUE', txHash };
+  }
+  if (policy.expectedFrom && normalize(transaction.from) !== normalize(policy.expectedFrom)) {
+    return { status: 'BLOCKED_WITH_REASON', reasonCode: 'TRANSACTION_MISMATCH', txHash };
   }
 
   const confirmations = head - hexToBigInt(receipt.blockNumber);
