@@ -4,8 +4,14 @@ export interface RpcReceipt {
   status: string | null;
   from: string;
   to: string | null;
-  value?: string;
   blockHash?: string;
+}
+
+export interface RpcTransaction {
+  hash: string;
+  from: string;
+  to: string | null;
+  value: string;
 }
 
 interface RpcResponse<T> {
@@ -20,40 +26,40 @@ export class RpcClient {
     if (!rpcUrl.startsWith('https://')) throw new Error('RPC_MUST_USE_HTTPS');
   }
 
-  async getTransactionReceipt(txHash: string): Promise<RpcReceipt | null> {
+  private async call<T>(method: string, params: unknown[]): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const response = await fetch(this.rpcUrl, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [txHash] }),
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`RPC_HTTP_${response.status}`);
-      const body = (await response.json()) as RpcResponse<RpcReceipt>;
+      const body = (await response.json()) as RpcResponse<T>;
       if (body.error) throw new Error(`RPC_${body.error.code}:${body.error.message}`);
-      return body.result ?? null;
+      if (body.result === undefined) throw new Error('RPC_EMPTY_RESULT');
+      return body.result;
     } finally {
       clearTimeout(timer);
     }
   }
 
+  getChainId(): Promise<string> {
+    return this.call<string>('eth_chainId', []);
+  }
+
+  getTransactionReceipt(txHash: string): Promise<RpcReceipt | null> {
+    return this.call<RpcReceipt | null>('eth_getTransactionReceipt', [txHash]);
+  }
+
+  getTransactionByHash(txHash: string): Promise<RpcTransaction | null> {
+    return this.call<RpcTransaction | null>('eth_getTransactionByHash', [txHash]);
+  }
+
   async getBlockNumber(): Promise<bigint> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const response = await fetch(this.rpcUrl, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`RPC_HTTP_${response.status}`);
-      const body = (await response.json()) as RpcResponse<string>;
-      if (body.error || !body.result) throw new Error(body.error?.message ?? 'RPC_INVALID_BLOCK_NUMBER');
-      return BigInt(body.result);
-    } finally {
-      clearTimeout(timer);
-    }
+    const value = await this.call<string>('eth_blockNumber', []);
+    return BigInt(value);
   }
 }
