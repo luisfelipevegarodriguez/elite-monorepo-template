@@ -20,15 +20,30 @@ function requireAuthorityToken(request: FastifyRequest, reply: FastifyReply, don
 
 function validateBundle(bundle: EvidenceBundle, action: Awaited<ReturnType<typeof getAction>>): string | null {
   if (!action) return 'NOT_FOUND';
-  if (action.canonicalStatus === 'VERIFIED') return 'VERIFICATION_FAILED';
+  if (action.canonicalStatus === 'VERIFIED' || action.canonicalStatus === 'BLOCKED_WITH_REASON') return 'VERIFICATION_FAILED';
   if (bundle.bundle_header.action_reference !== action.actionId) return 'VERIFICATION_FAILED';
   if (bundle.bundle_header.contract_reference !== 'EC-001-REVENUE-GATE') return 'VERIFICATION_FAILED';
   if (bundle.bundle_header.verifier_id !== action.independentVerifierId) return 'VERIFICATION_FAILED';
+  if (bundle.bundle_header.idempotency_key !== action.actionId) return 'VERIFICATION_FAILED';
   if (bundle.bundle_header.freshness_policy_seconds !== action.expectedEffect.freshnessPolicySeconds) return 'POLICY_VIOLATION';
   if (!bundle.observation_data.raw_payload_hash?.startsWith('sha256:')) return 'VERIFICATION_FAILED';
+  if (!bundle.integrity.raw_payload_hash || bundle.integrity.raw_payload_hash !== bundle.observation_data.raw_payload_hash) return 'INTEGRITY_FAILURE';
   if (!isReasonCode(bundle.verdict.reason_code) && bundle.verdict.reason_code !== null) return 'VERIFICATION_FAILED';
-  if (bundle.verdict.status === 'VERIFIED' && (!Object.values(bundle.assertions).every(Boolean) || bundle.verdict.reason_code !== null)) return 'VERIFICATION_FAILED';
+
+  const observedAt = Date.parse(bundle.observation_data.observed_at);
+  const actionAt = Date.parse(action.expectedEffect.actionTimestamp);
+  const delta = (observedAt - actionAt) / 1000;
+  if (!Number.isFinite(observedAt) || !Number.isFinite(actionAt) || observedAt <= actionAt || delta > action.expectedEffect.freshnessPolicySeconds) return 'POLICY_VIOLATION';
+  if (Math.abs(delta - bundle.observation_data.freshness_delta_seconds) > 0.001) return 'INTEGRITY_FAILURE';
+  if (bundle.observation_data.http_status !== 200) return 'INVALID_SOURCE_RESPONSE';
+
+  const a = bundle.assertions;
+  const allAssertions = Object.values(a).every(Boolean);
+  if (bundle.verdict.status === 'VERIFIED' && (!allAssertions || bundle.verdict.reason_code !== null)) return 'VERIFICATION_FAILED';
   if (bundle.verdict.status === 'BLOCKED_WITH_REASON' && !bundle.verdict.reason_code) return 'VERIFICATION_FAILED';
+  if (bundle.verdict.status === 'VERIFIED' && bundle.verdict.evidence_confidence !== 1.0) return 'VERIFICATION_FAILED';
+  if (bundle.verdict.status === 'BLOCKED_WITH_REASON' && bundle.verdict.evidence_confidence !== 0.0) return 'VERIFICATION_FAILED';
+  if (bundle.verdict.status === 'VERIFIED' && (!a.user_identity_match || !a.entitlement_exists || !a.entitlement_active || !a.product_id_correlation || !a.expiration_policy_compliance || !a.correlation_reference_match)) return 'VERIFICATION_FAILED';
   return null;
 }
 
