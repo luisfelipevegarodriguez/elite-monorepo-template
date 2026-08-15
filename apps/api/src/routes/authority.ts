@@ -19,7 +19,7 @@ interface RegisterBody {
   expectedEffect?: ExpectedEffect;
 }
 
-const REASON_SET = new Set(REASON_CODES);
+const REASON_SET = new Set<string>(REASON_CODES);
 
 function requireAuthorityToken(request: FastifyRequest, reply: FastifyReply, done: () => void): void {
   const configured = process.env.AUTHORITY_TOKEN;
@@ -54,10 +54,10 @@ function validateBundle(bundle: EvidenceBundle, action: Awaited<ReturnType<typeo
   if (bundle.bundle_header.verifier_id !== action.independentVerifierId) return 'INTEGRITY_FAILURE';
   if (bundle.bundle_header.freshness_policy_seconds !== action.expectedEffect.freshnessPolicySeconds) return 'INTEGRITY_FAILURE';
   if (!bundle.observation_data.raw_payload_hash?.startsWith('sha256:')) return 'INTEGRITY_FAILURE';
-  if (!REASON_SET.has(bundle.verdict.reason_code as never) && bundle.verdict.reason_code !== null) return 'INTEGRITY_FAILURE';
+  if (bundle.verdict.reason_code !== null && !REASON_SET.has(bundle.verdict.reason_code)) return 'INTEGRITY_FAILURE';
+  if (bundle.verdict.status !== 'VERIFIED' && bundle.verdict.status !== 'BLOCKED_WITH_REASON') return 'INTEGRITY_FAILURE';
 
-  const assertions = bundle.assertions;
-  const allTrue = Object.values(assertions).every(Boolean);
+  const allTrue = Object.values(bundle.assertions).every(Boolean);
   if (bundle.verdict.status === 'VERIFIED' && (!allTrue || bundle.verdict.reason_code !== null)) return 'INTEGRITY_FAILURE';
   if (bundle.verdict.status === 'BLOCKED_WITH_REASON' && !bundle.verdict.reason_code) return 'INTEGRITY_FAILURE';
   return null;
@@ -130,14 +130,7 @@ export async function authorityRoutes(server: FastifyInstance): Promise<void> {
       }
 
       result.bundle.integrity.canonical_signature = signBundle(result.bundle);
-      const updated = await recordVerification(
-        state.actionId,
-        result.evidenceId,
-        result.status,
-        result.reason,
-        result.bundle,
-      );
-
+      const updated = await recordVerification(state.actionId, result.evidenceId, result.status, result.reason, result.bundle);
       return reply.code(result.status === 'VERIFIED' ? 200 : 409).send({ state: updated, evidence: result.bundle });
     },
   );
