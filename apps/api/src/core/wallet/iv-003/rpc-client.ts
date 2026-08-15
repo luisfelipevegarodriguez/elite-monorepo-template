@@ -1,3 +1,9 @@
+export interface RpcLog {
+  address: string;
+  topics: string[];
+  data: string;
+}
+
 export interface RpcReceipt {
   transactionHash: string;
   blockNumber: string;
@@ -5,6 +11,7 @@ export interface RpcReceipt {
   from: string;
   to: string | null;
   blockHash?: string;
+  logs: RpcLog[];
 }
 
 export interface RpcTransaction {
