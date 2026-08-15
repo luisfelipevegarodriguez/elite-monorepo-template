@@ -4,16 +4,19 @@ import { neon } from '@neondatabase/serverless';
 export type CanonicalStatus = 'REQUESTED' | 'BLOCKED_WITH_REASON' | 'VERIFIED';
 
 export interface ExpectedEffect {
-  kind: 'github_commit_exists';
-  repository: string;
-  commitSha: string;
+  kind: 'revenuecat_entitlement_active';
+  appUserId: string;
+  expectedProductIdentifier: string;
+  expectedEntitlementId: string;
+  actionTimestamp: string;
+  freshnessPolicySeconds: number;
 }
 
 export interface ActionEntry {
   actionId: string;
   expectedEffect: ExpectedEffect;
-  observationMethod: 'github_public_api';
-  independentVerifierId: string;
+  observationMethod: 'revenuecat_v1_customer_info';
+  independentVerifierId: 'REVENUE-CAT-INDEPENDENT-VERIFIER-01';
 }
 
 export interface ActionState extends ActionEntry {
@@ -28,7 +31,7 @@ interface LedgerRow {
   action_id: string;
   expected_effect: ExpectedEffect;
   observation_method: ActionEntry['observationMethod'];
-  independent_verifier_id: string;
+  independent_verifier_id: ActionEntry['independentVerifierId'];
   canonical_status: CanonicalStatus;
   evidence_id: string | null;
   reason: string | null;
@@ -39,16 +42,11 @@ interface LedgerRow {
 const sql = neon(process.env.DATABASE_URL ?? '');
 
 function hashEvent(payload: string, previousHash: string | null): string {
-  return createHash('sha256')
-    .update(`${previousHash ?? ''}:${payload}`)
-    .digest('hex');
+  return createHash('sha256').update(`${previousHash ?? ''}:${payload}`).digest('hex');
 }
 
 export async function ensureAuthoritySchema(): Promise<void> {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL_REQUIRED_FOR_CANONICAL_AUTHORITY');
-  }
-
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL_REQUIRED_FOR_CANONICAL_AUTHORITY');
   await sql`
     CREATE TABLE IF NOT EXISTS action_ledger (
       action_id TEXT PRIMARY KEY,
@@ -62,7 +60,6 @@ export async function ensureAuthoritySchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
-
   await sql`
     CREATE TABLE IF NOT EXISTS action_ledger_events (
       event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -80,29 +77,24 @@ export async function registerIntent(entry: ActionEntry): Promise<ActionState> {
   await ensureAuthoritySchema();
   const payload = JSON.stringify({ type: 'INTENT_REGISTERED', entry });
   const eventHash = hashEvent(payload, null);
-
   await sql`
     INSERT INTO action_ledger (
       action_id, expected_effect, observation_method, independent_verifier_id
     ) VALUES (
       ${entry.actionId}, ${JSON.stringify(entry.expectedEffect)},
       ${entry.observationMethod}, ${entry.independentVerifierId}
-    )
-    ON CONFLICT (action_id) DO NOTHING
+    ) ON CONFLICT (action_id) DO NOTHING
   `;
-
   await sql`
     INSERT INTO action_ledger_events (action_id, event_type, payload, previous_hash, event_hash)
     VALUES (${entry.actionId}, 'INTENT_REGISTERED', ${payload}, NULL, ${eventHash})
     ON CONFLICT (event_hash) DO NOTHING
   `;
-
   const [state] = await sql`
     SELECT action_id, expected_effect, observation_method, independent_verifier_id,
            canonical_status, evidence_id, reason, created_at, updated_at
     FROM action_ledger WHERE action_id = ${entry.actionId}
   ` as LedgerRow[];
-
   return toState(state);
 }
 
@@ -144,13 +136,11 @@ export async function recordVerification(
       ${actionId}, 'VERIFICATION', ${payload}, ${latestEvent?.event_hash ?? null}, ${eventHash}
     )
   `;
-
   await sql`
     UPDATE action_ledger
     SET canonical_status = ${status}, evidence_id = ${evidenceId}, reason = ${reason}, updated_at = NOW()
     WHERE action_id = ${actionId} AND canonical_status <> 'VERIFIED'
   `;
-
   const updated = await getAction(actionId);
   if (!updated) throw new Error('ACTION_STATE_LOST');
   return updated;
