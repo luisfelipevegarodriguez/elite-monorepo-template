@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ObservationRequest, ObservedEntitlement } from './contract.js';
 import type { ReasonCode } from './reason-code.js';
-import { canonicalize } from './canonicalize.js';
 
 export interface RevenueCatObservation {
   httpStatus: number;
@@ -17,7 +16,6 @@ const RETRYABLE = new Set([429, 500, 502, 503, 504]);
 const RETRY_DELAYS_MS = [0, 500, 1500, 3000];
 
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
-function canonicalPayloadHash(payload: unknown): string { return `sha256:${createHash('sha256').update(canonicalize(payload), 'utf8').digest('hex')}`; }
 function rawBytesHash(raw: string): string { return `sha256:${createHash('sha256').update(raw, 'utf8').digest('hex')}`; }
 function reasonForStatus(status: number): ReasonCode {
   if (status === 401 || status === 403) return 'UNAUTHORIZED';
@@ -34,7 +32,8 @@ function normalizeDate(value: unknown): string | null {
 
 export async function observeRevenueCat(request: ObservationRequest): Promise<RevenueCatObservation> {
   const secret = process.env.REVENUECAT_SECRET_KEY;
-  const source = `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(request.appUserId)}`;
+  const source = 'https://api.revenuecat.com/v1/subscribers/{app_user_id}';
+  const url = `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(request.appUserId)}`;
   if (!secret) return { httpStatus: 0, observedAt: new Date().toISOString(), rawPayloadHash: 'sha256:', originalAppUserId: null, entitlement: null, reasonCode: 'MISSING_SECRET', source };
 
   for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
@@ -42,17 +41,17 @@ export async function observeRevenueCat(request: ObservationRequest): Promise<Re
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await fetch(source, { method: 'GET', headers: { Authorization: `Bearer ${secret}`, Accept: 'application/json' }, signal: controller.signal });
+      const response = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${secret}`, Accept: 'application/json' }, signal: controller.signal });
       const raw = await response.text();
       const observedAt = new Date().toISOString();
+      const rawPayloadHash = rawBytesHash(raw);
       if (!response.ok) {
         if (RETRYABLE.has(response.status) && attempt < RETRY_DELAYS_MS.length - 1) continue;
-        return { httpStatus: response.status, observedAt, rawPayloadHash: rawBytesHash(raw), originalAppUserId: null, entitlement: null, reasonCode: reasonForStatus(response.status), source };
+        return { httpStatus: response.status, observedAt, rawPayloadHash, originalAppUserId: null, entitlement: null, reasonCode: reasonForStatus(response.status), source };
       }
 
       let payload: unknown;
-      try { payload = JSON.parse(raw); } catch { return { httpStatus: response.status, observedAt, rawPayloadHash: rawBytesHash(raw), originalAppUserId: null, entitlement: null, reasonCode: 'INVALID_SOURCE_RESPONSE', source }; }
-      const rawPayloadHash = canonicalPayloadHash(payload);
+      try { payload = JSON.parse(raw); } catch { return { httpStatus: response.status, observedAt, rawPayloadHash, originalAppUserId: null, entitlement: null, reasonCode: 'INVALID_SOURCE_RESPONSE', source }; }
       const subscriber = (payload as { subscriber?: unknown })?.subscriber;
       if (!subscriber || typeof subscriber !== 'object') return { httpStatus: response.status, observedAt, rawPayloadHash, originalAppUserId: null, entitlement: null, reasonCode: 'INVALID_SOURCE_RESPONSE', source };
 
