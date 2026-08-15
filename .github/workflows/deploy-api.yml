@@ -1,11 +1,6 @@
-# deploy-api.yml v2.1
-# GAPS CORREGIDOS:
-#   - attribute-condition endurecido: solo este repo exacto puede asumir la SA
-#   - path filter incluye packages/** para rebuilds cuando cambian dependencias
-#   - docker buildx para cache de capas entre runs
-#   - Cloud Run flags explícitos: port, timeout, concurrency
-
+# deploy-api.yml — single production deployment authority for the API
 name: deploy-api
+
 on:
   push:
     branches: [main]
@@ -17,7 +12,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # SOLO lo necesario para OIDC
+  id-token: write
 
 jobs:
   deploy:
@@ -32,15 +27,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
 
-      - run: pnpm install --frozen-lockfile
-
-      - name: Build API
-        run: |
-          TURBO_TOKEN=${{ secrets.TURBO_TOKEN }} \
-          TURBO_TEAM=${{ secrets.TURBO_TEAM }} \
-          pnpm turbo build --filter=api
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @repo/api build
 
       - id: auth
         name: Auth GCP (OIDC — zero static keys)
@@ -48,36 +37,31 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          # Restricción por repo exacto: ninguna otra accion puede usar esta SA
-          # Se configura en el provider con attribute-condition:
-          # assertion.repository == 'luisfelipevegarodriguez/elite-monorepo-template'
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Set up Docker Buildx (cache entre runs)
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build & Push a Artifact Registry
+      - name: Build and push immutable image
         env:
           REGION: ${{ secrets.GCP_REGION }}
           PROJECT: ${{ secrets.GCP_PROJECT }}
         run: |
-          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/apps/api:${{ github.sha }}"
-          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/elite-monorepo/api:${{ github.sha }}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
           docker buildx build \
-            --cache-from type=registry,ref=${REGION}-docker.pkg.dev/${PROJECT}/apps/api:cache \
-            --cache-to   type=registry,ref=${REGION}-docker.pkg.dev/${PROJECT}/apps/api:cache,mode=max \
             --platform linux/amd64 \
             --push \
             -f apps/api/Dockerfile \
             -t "$IMAGE" .
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Deploy a Cloud Run
+      - name: Deploy to the Terraform-owned Cloud Run service
         run: |
-          gcloud run deploy api \
+          gcloud run deploy elite-api \
             --image "$IMAGE" \
-            --region ${{ secrets.GCP_REGION }} \
+            --region "${{ secrets.GCP_REGION }}" \
             --platform managed \
             --allow-unauthenticated \
             --port 8080 \
@@ -89,4 +73,11 @@ jobs:
             --max-instances 10 \
             --set-env-vars "NODE_ENV=production" \
             --quiet
-          echo "✅ Deploy OK: $(gcloud run services describe api --region=${{ secrets.GCP_REGION }} --format='value(status.url)')"
+
+      - name: Independent runtime observation
+        run: |
+          URL="$(gcloud run services describe elite-api --region="${{ secrets.GCP_REGION }}" --format='value(status.url)')"
+          test -n "$URL"
+          BODY="$(curl --fail --silent --show-error --max-time 10 "$URL/health")"
+          echo "$BODY"
+          echo "$BODY" | grep -q '"status":"ok"'
