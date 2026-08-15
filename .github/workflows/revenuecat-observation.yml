@@ -1,0 +1,89 @@
+name: revenuecat-real-observation
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_user_id:
+        description: 'Existing controlled RevenueCat App User ID'
+        required: true
+        type: string
+      expected_product_identifier:
+        description: 'Expected RevenueCat product_identifier'
+        required: true
+        type: string
+      expected_entitlement_id:
+        description: 'Expected RevenueCat entitlement identifier'
+        required: true
+        type: string
+      freshness_policy_seconds:
+        description: 'EC-001 freshness window'
+        required: false
+        default: '300'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.CANONICAL_API_URL }}
+      AUTHORITY_TOKEN: ${{ secrets.CANONICAL_AUTHORITY_TOKEN }}
+      APP_USER_ID: ${{ inputs.app_user_id }}
+      EXPECTED_PRODUCT_ID: ${{ inputs.expected_product_identifier }}
+      EXPECTED_ENTITLEMENT_ID: ${{ inputs.expected_entitlement_id }}
+      FRESHNESS_POLICY: ${{ inputs.freshness_policy_seconds }}
+    steps:
+      - name: Require real control-plane configuration
+        run: |
+          test -n "$API_URL"
+          test -n "$AUTHORITY_TOKEN"
+          echo "Control plane configured. No mock path is permitted."
+
+      - name: Register action intent in canonical ledger
+        id: register
+        env:
+          AUTHORITY_TOKEN: ${{ secrets.CANONICAL_AUTHORITY_TOKEN }}
+        run: |
+          ACTION_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          BODY=$(jq -nc \
+            --arg app "$APP_USER_ID" \
+            --arg product "$EXPECTED_PRODUCT_ID" \
+            --arg entitlement "$EXPECTED_ENTITLEMENT_ID" \
+            --arg timestamp "$ACTION_TIMESTAMP" \
+            --argjson freshness "$FRESHNESS_POLICY" \
+            '{expectedEffect:{kind:"revenuecat_entitlement_active",appUserId:$app,expectedProductIdentifier:$product,expectedEntitlementId:$entitlement,actionTimestamp:$timestamp,freshnessPolicySeconds:$freshness}}')
+          RESPONSE=$(curl --fail --silent --show-error \
+            -X POST "$API_URL/api/v1/authority/actions" \
+            -H "Authorization: Bearer $AUTHORITY_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "$BODY")
+          echo "$RESPONSE" | tee action.json
+          ACTION_ID=$(echo "$RESPONSE" | jq -r '.actionId')
+          test "$ACTION_ID" != "null"
+          echo "ACTION_ID=$ACTION_ID" >> "$GITHUB_ENV"
+
+      - name: Execute independent RevenueCat observation
+        env:
+          AUTHORITY_TOKEN: ${{ secrets.CANONICAL_AUTHORITY_TOKEN }}
+        run: |
+          HTTP_CODE=$(curl --silent --show-error \
+            -o evidence-response.json \
+            -w '%{http_code}' \
+            -X POST "$API_URL/api/v1/authority/actions/$ACTION_ID/verify/revenuecat" \
+            -H "Authorization: Bearer $AUTHORITY_TOKEN")
+          cat evidence-response.json
+          test "$HTTP_CODE" = "200" || test "$HTTP_CODE" = "409"
+
+      - name: Assert terminal typed result only
+        run: |
+          STATUS=$(jq -r '.state.canonicalStatus // empty' evidence-response.json)
+          REASON=$(jq -r '.state.reason // empty' evidence-response.json)
+          test "$STATUS" = "VERIFIED" || test "$STATUS" = "BLOCKED_WITH_REASON"
+          if [ "$STATUS" = "BLOCKED_WITH_REASON" ]; then
+            test -n "$REASON"
+            echo "REAL OBSERVATION BLOCKED: $REASON"
+            exit 1
+          fi
+          echo "REAL OBSERVATION VERIFIED for action $ACTION_ID"
