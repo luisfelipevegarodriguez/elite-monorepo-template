@@ -21,22 +21,22 @@ export interface ObservedEntitlement {
 
 export interface ObservationData {
   source: string;
-  httpStatus: number;
-  rawPayloadHash: string;
-  observedAt: string;
-  freshnessDeltaSeconds: number;
-  observedProductIdentifier: string | null;
-  observedExpiresDate: string | null;
-  observedPurchaseDate: string | null;
+  http_status: number;
+  raw_payload_hash: string;
+  observed_at: string;
+  freshness_delta_seconds: number;
+  observed_product_identifier: string | null;
+  observed_expires_date: string | null;
+  observed_purchase_date: string | null;
 }
 
 export interface AssertionResult {
-  userIdentityMatch: boolean;
-  entitlementExists: boolean;
-  entitlementActive: boolean;
-  productIdCorrelation: boolean;
-  expirationPolicyCompliance: boolean;
-  correlationReferenceMatch: boolean;
+  user_identity_match: boolean;
+  entitlement_exists: boolean;
+  entitlement_active: boolean;
+  product_id_correlation: boolean;
+  expiration_policy_compliance: boolean;
+  correlation_reference_match: boolean;
 }
 
 export type VerificationStatus = 'VERIFIED' | 'BLOCKED_WITH_REASON' | 'INCONCLUSIVE';
