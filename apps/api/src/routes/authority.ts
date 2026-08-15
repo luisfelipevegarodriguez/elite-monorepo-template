@@ -1,160 +1,97 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import {
-  getAction,
-  registerIntent,
-  recordVerification,
-  type ActionEntry,
-  type ExpectedEffect,
-} from '../core/authority/action-ledger.js';
-import {
-  canonicalUnsignedBundle,
-  REASON_CODES,
-  verifyRevenueCat,
-  type EvidenceBundle,
-} from '../core/authority/revenuecat-verifier.js';
+import { getAction, registerIntent, recordVerification, type ActionEntry, type ExpectedEffect } from '../core/authority/action-ledger.js';
+import { canonicalUnsignedBundle } from '../core/authority/revenuecat/canonicalize.js';
+import { REASON_CODES, isReasonCode } from '../core/authority/revenuecat/reason-code.js';
+import { signEvidenceBundle, verifyEvidenceBundleSignature } from '../core/authority/revenuecat/signer.js';
+import { verifyEC001 } from '../core/authority/revenuecat/verifier.js';
+import type { EvidenceBundle } from '../core/authority/revenuecat/contract.js';
 
-interface RegisterBody {
-  actionId?: string;
-  expectedEffect?: ExpectedEffect;
-}
-
+interface RegisterBody { actionId?: string; expectedEffect?: ExpectedEffect }
 const REASON_SET = new Set<string>(REASON_CODES);
 
 function requireAuthorityToken(request: FastifyRequest, reply: FastifyReply, done: () => void): void {
   const configured = process.env.AUTHORITY_TOKEN;
-  const presented = request.headers.authorization?.startsWith('Bearer ')
-    ? request.headers.authorization.slice('Bearer '.length)
-    : '';
-  if (!configured || !presented) {
-    reply.code(503).send({ status: 'BLOCKED_WITH_REASON', reason: 'AUTHORITY_NOT_CONFIGURED' });
-    return;
-  }
-  const configuredBytes = Buffer.from(configured);
-  const presentedBytes = Buffer.from(presented);
-  const valid = configuredBytes.length === presentedBytes.length && timingSafeEqual(configuredBytes, presentedBytes);
-  if (!valid) {
-    reply.code(401).send({ status: 'BLOCKED_WITH_REASON', reason: 'AUTHORITY_UNAUTHORIZED' });
-    return;
-  }
+  const presented = request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : '';
+  if (!configured || !presented) { reply.code(503).send({ status: 'BLOCKED_WITH_REASON', reason: 'MISSING_CONFIGURATION' }); return; }
+  const a = Buffer.from(configured); const b = Buffer.from(presented);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) { reply.code(401).send({ status: 'BLOCKED_WITH_REASON', reason: 'UNAUTHORIZED' }); return; }
   done();
 }
 
-function signBundle(bundle: EvidenceBundle): string {
-  const key = process.env.CANONICAL_SIGNING_KEY;
-  if (!key) throw new Error('CANONICAL_SIGNING_KEY_REQUIRED');
-  return `hmac-sha256:${createHmac('sha256', key).update(canonicalUnsignedBundle(bundle), 'utf8').digest('hex')}`;
-}
-
 function validateBundle(bundle: EvidenceBundle, action: Awaited<ReturnType<typeof getAction>>): string | null {
-  if (!action) return 'ACTION_NOT_FOUND';
-  if (action.canonicalStatus === 'VERIFIED') return 'ALREADY_TERMINAL';
-  if (bundle.bundle_header.action_reference !== action.actionId) return 'INTEGRITY_FAILURE';
-  if (bundle.bundle_header.contract_reference !== 'EC-001-REVENUE-GATE') return 'INTEGRITY_FAILURE';
-  if (bundle.bundle_header.verifier_id !== action.independentVerifierId) return 'INTEGRITY_FAILURE';
-  if (bundle.bundle_header.freshness_policy_seconds !== action.expectedEffect.freshnessPolicySeconds) return 'INTEGRITY_FAILURE';
-  if (!bundle.observation_data.raw_payload_hash?.startsWith('sha256:')) return 'INTEGRITY_FAILURE';
-  if (bundle.verdict.reason_code !== null && !REASON_SET.has(bundle.verdict.reason_code)) return 'INTEGRITY_FAILURE';
-  if (bundle.verdict.status !== 'VERIFIED' && bundle.verdict.status !== 'BLOCKED_WITH_REASON') return 'INTEGRITY_FAILURE';
-
-  const allTrue = Object.values(bundle.assertions).every(Boolean);
-  if (bundle.verdict.status === 'VERIFIED' && (!allTrue || bundle.verdict.reason_code !== null)) return 'INTEGRITY_FAILURE';
-  if (bundle.verdict.status === 'BLOCKED_WITH_REASON' && !bundle.verdict.reason_code) return 'INTEGRITY_FAILURE';
+  if (!action) return 'NOT_FOUND';
+  if (action.canonicalStatus === 'VERIFIED') return 'VERIFICATION_FAILED';
+  if (bundle.bundle_header.action_reference !== action.actionId) return 'VERIFICATION_FAILED';
+  if (bundle.bundle_header.contract_reference !== 'EC-001-REVENUE-GATE') return 'VERIFICATION_FAILED';
+  if (bundle.bundle_header.verifier_id !== action.independentVerifierId) return 'VERIFICATION_FAILED';
+  if (bundle.bundle_header.freshness_policy_seconds !== action.expectedEffect.freshnessPolicySeconds) return 'POLICY_VIOLATION';
+  if (!bundle.observation_data.rawPayloadHash?.startsWith('sha256:')) return 'VERIFICATION_FAILED';
+  if (!isReasonCode(bundle.verdict.reason_code) && bundle.verdict.reason_code !== null) return 'VERIFICATION_FAILED';
+  if (bundle.verdict.status === 'VERIFIED' && (!Object.values(bundle.assertions).every(Boolean) || bundle.verdict.reason_code !== null)) return 'VERIFICATION_FAILED';
+  if (bundle.verdict.status === 'BLOCKED_WITH_REASON' && !bundle.verdict.reason_code) return 'VERIFICATION_FAILED';
   return null;
 }
 
 export async function authorityRoutes(server: FastifyInstance): Promise<void> {
   server.post<{ Body: RegisterBody }>('/actions', { preHandler: requireAuthorityToken }, async (request, reply) => {
-    const body = request.body;
-    const expected = body.expectedEffect;
-    if (
-      !expected ||
-      expected.kind !== 'revenuecat_entitlement_active' ||
-      !expected.appUserId ||
-      !expected.expectedProductIdentifier ||
-      !expected.expectedEntitlementId ||
-      !Number.isFinite(Date.parse(expected.actionTimestamp)) ||
-      expected.freshnessPolicySeconds <= 0 ||
-      expected.freshnessPolicySeconds > 3600
-    ) {
-      return reply.code(400).send({ status: 'BLOCKED_WITH_REASON', reason: 'INTEGRITY_FAILURE' });
+    const expected = request.body?.expectedEffect;
+    if (!expected || expected.kind !== 'revenuecat_entitlement_active' || !expected.appUserId || !expected.expectedProductIdentifier || !expected.expectedEntitlementId || !Number.isFinite(Date.parse(expected.actionTimestamp)) || expected.freshnessPolicySeconds <= 0 || expected.freshnessPolicySeconds > 3600) {
+      return reply.code(400).send({ status: 'BLOCKED_WITH_REASON', reason: 'VERIFICATION_FAILED' });
     }
-
-    const entry: ActionEntry = {
-      actionId: body.actionId ?? randomUUID(),
-      expectedEffect: expected,
-      observationMethod: 'revenuecat_v1_customer_info',
-      independentVerifierId: 'REVENUE-CAT-INDEPENDENT-VERIFIER-01',
-    };
+    const entry: ActionEntry = { actionId: request.body?.actionId ?? randomUUID(), expectedEffect: expected, observationMethod: 'revenuecat_v1_customer_info', independentVerifierId: 'REVENUE-CAT-INDEPENDENT-VERIFIER-01' };
     return reply.code(201).send(await registerIntent(entry));
   });
 
   server.get<{ Params: { actionId: string } }>('/actions/:actionId', { preHandler: requireAuthorityToken }, async (request, reply) => {
     const state = await getAction(request.params.actionId);
-    if (!state) return reply.code(404).send({ status: 'BLOCKED_WITH_REASON', reason: 'ACTION_NOT_FOUND' });
+    if (!state) return reply.code(404).send({ status: 'BLOCKED_WITH_REASON', reason: 'NOT_FOUND' });
     return state;
   });
 
-  server.post<{ Params: { actionId: string } }>(
-    '/actions/:actionId/verify/revenuecat',
-    { preHandler: requireAuthorityToken },
-    async (request, reply) => {
-      const state = await getAction(request.params.actionId);
-      if (!state) return reply.code(404).send({ status: 'BLOCKED_WITH_REASON', reason: 'ACTION_NOT_FOUND' });
-      if (state.observationMethod !== 'revenuecat_v1_customer_info') {
-        return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: 'INTEGRITY_FAILURE' });
-      }
-      if (state.canonicalStatus === 'VERIFIED') {
-        return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: 'ALREADY_TERMINAL' });
-      }
-      if (state.canonicalStatus === 'BLOCKED_WITH_REASON') {
-        return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: 'ACTION_ALREADY_BLOCKED' });
-      }
+  server.post<{ Params: { actionId: string } }>('/actions/:actionId/verify/revenuecat', { preHandler: requireAuthorityToken }, async (request, reply) => {
+    const state = await getAction(request.params.actionId);
+    if (!state) return reply.code(404).send({ status: 'BLOCKED_WITH_REASON', reason: 'NOT_FOUND' });
+    if (state.canonicalStatus === 'VERIFIED' || state.canonicalStatus === 'BLOCKED_WITH_REASON') return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: 'VERIFICATION_FAILED' });
 
-      const result = await verifyRevenueCat(state.actionId, state.expectedEffect);
-      const validationError = validateBundle(result.bundle, state);
-      if (validationError) {
-        const blocked = await recordVerification(state.actionId, result.evidenceId, 'BLOCKED_WITH_REASON', 'INTEGRITY_FAILURE', {
-          verifier: result.bundle.bundle_header.verifier_id,
-          validationError,
-        });
-        return reply.code(409).send({ state: blocked, evidence: result.bundle });
-      }
+    const result = await verifyEC001({
+      actionId: state.actionId,
+      appUserId: state.expectedEffect.appUserId,
+      expectedProductIdentifier: state.expectedEffect.expectedProductIdentifier,
+      expectedEntitlementId: state.expectedEffect.expectedEntitlementId,
+      actionTimestamp: state.expectedEffect.actionTimestamp,
+      freshnessPolicySeconds: state.expectedEffect.freshnessPolicySeconds,
+    });
 
-      if (!process.env.CANONICAL_SIGNING_KEY) {
-        const blocked = await recordVerification(state.actionId, result.evidenceId, 'BLOCKED_WITH_REASON', 'INTEGRITY_FAILURE', {
-          verifier: result.bundle.bundle_header.verifier_id,
-          reason: 'CANONICAL_SIGNING_KEY_REQUIRED',
-        });
-        return reply.code(503).send({ state: blocked, evidence: result.bundle });
-      }
+    if (!process.env.CANONICAL_SIGNING_KEY) {
+      const blocked = await recordVerification(state.actionId, result.evidenceId, 'BLOCKED_WITH_REASON', 'MISSING_SECRET', result.bundle);
+      return reply.code(503).send({ state: blocked, evidence: result.bundle });
+    }
 
-      result.bundle.integrity.canonical_signature = signBundle(result.bundle);
-      const updated = await recordVerification(state.actionId, result.evidenceId, result.status, result.reason, result.bundle);
-      return reply.code(result.status === 'VERIFIED' ? 200 : 409).send({ state: updated, evidence: result.bundle });
-    },
-  );
+    result.bundle.integrity.canonical_signature = signEvidenceBundle(result.bundle);
+    const validationError = validateBundle(result.bundle, state);
+    if (validationError || !verifyEvidenceBundleSignature(result.bundle)) {
+      const blocked = await recordVerification(state.actionId, result.evidenceId, 'BLOCKED_WITH_REASON', validationError ?? 'VERIFICATION_FAILED', result.bundle);
+      return reply.code(409).send({ state: blocked, evidence: result.bundle });
+    }
 
-  server.post<{ Body: { bundle: EvidenceBundle } }>(
-    '/evidence-bundles/validate',
-    { preHandler: requireAuthorityToken },
-    async (request, reply) => {
-      const bundle = request.body?.bundle;
-      if (!bundle) return reply.code(400).send({ status: 'BLOCKED_WITH_REASON', reason: 'INTEGRITY_FAILURE' });
-      const action = await getAction(bundle.bundle_header?.action_reference ?? '');
-      const validationError = validateBundle(bundle, action);
-      if (validationError) return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: validationError });
+    const finalStatus = result.status === 'VERIFIED' ? 'VERIFIED' : 'BLOCKED_WITH_REASON';
+    const updated = await recordVerification(state.actionId, result.evidenceId, finalStatus, result.reasonCode, result.bundle);
+    return reply.code(finalStatus === 'VERIFIED' ? 200 : 409).send({ state: updated, evidence: result.bundle, verifier_status: result.status });
+  });
 
-      const key = process.env.CANONICAL_SIGNING_KEY;
-      if (!key || !bundle.integrity.canonical_signature) {
-        return reply.code(503).send({ status: 'BLOCKED_WITH_REASON', reason: 'INTEGRITY_FAILURE' });
-      }
-      const expected = Buffer.from(signBundle(bundle));
-      const presented = Buffer.from(bundle.integrity.canonical_signature);
-      if (expected.length !== presented.length || !timingSafeEqual(expected, presented)) {
-        return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: 'INTEGRITY_FAILURE' });
-      }
+  server.post<{ Body: { bundle: EvidenceBundle } }>('/evidence-bundles/validate', { preHandler: requireAuthorityToken }, async (request, reply) => {
+    const bundle = request.body?.bundle;
+    if (!bundle) return reply.code(400).send({ status: 'BLOCKED_WITH_REASON', reason: 'VERIFICATION_FAILED' });
+    const action = await getAction(bundle.bundle_header?.action_reference ?? '');
+    const error = validateBundle(bundle, action);
+    if (error) return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: error });
+    try {
+      const canonical = canonicalUnsignedBundle(bundle);
+      if (!canonical || !verifyEvidenceBundleSignature(bundle)) return reply.code(409).send({ status: 'BLOCKED_WITH_REASON', reason: 'VERIFICATION_FAILED' });
       return { status: 'VERIFIED', bundle_id: bundle.bundle_header.bundle_id };
-    },
-  );
+    } catch {
+      return reply.code(503).send({ status: 'BLOCKED_WITH_REASON', reason: 'SIGNING_FAILED' });
+    }
+  });
 }
