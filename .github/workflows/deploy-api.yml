@@ -7,7 +7,7 @@ on:
     paths:
       - 'apps/api/**'
       - 'packages/**'
-      - 'Dockerfile'
+      - 'apps/api/Dockerfile'
       - '.github/workflows/deploy-api.yml'
 
 permissions:
@@ -57,11 +57,13 @@ jobs:
             -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Deploy to the Terraform-owned Cloud Run service
+      - name: Deploy with Secret Manager-backed runtime secrets
+        env:
+          REGION: ${{ secrets.GCP_REGION }}
         run: |
           gcloud run deploy elite-api \
             --image "$IMAGE" \
-            --region "${{ secrets.GCP_REGION }}" \
+            --region "$REGION" \
             --platform managed \
             --allow-unauthenticated \
             --port 8080 \
@@ -72,11 +74,14 @@ jobs:
             --min-instances 0 \
             --max-instances 10 \
             --set-env-vars "NODE_ENV=production" \
+            --set-secrets "DATABASE_URL=elite-api-database-url:latest,AUTHORITY_TOKEN=elite-api-authority-token:latest,REVENUECAT_SECRET_KEY=elite-api-revenuecat-secret:latest,CANONICAL_SIGNING_KEY=elite-api-canonical-signing-key:latest" \
             --quiet
 
       - name: Independent runtime observation
+        env:
+          REGION: ${{ secrets.GCP_REGION }}
         run: |
-          URL="$(gcloud run services describe elite-api --region="${{ secrets.GCP_REGION }}" --format='value(status.url)')"
+          URL="$(gcloud run services describe elite-api --region="$REGION" --format='value(status.url)')"
           test -n "$URL"
           HEALTH="$(curl --fail --silent --show-error --max-time 10 "$URL/health")"
           echo "HEALTH=$HEALTH"
