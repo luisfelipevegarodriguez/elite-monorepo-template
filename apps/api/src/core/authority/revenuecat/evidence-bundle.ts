@@ -4,14 +4,7 @@ import { CONTRACT_REFERENCE, SCHEMA_VERSION, VERIFIER_ID } from './contract.js';
 import type { RevenueCatObservation } from './revenuecat-client.js';
 import type { ReasonCode } from './reason-code.js';
 
-export function buildEvidenceBundle(
-  request: ObservationRequest,
-  observation: RevenueCatObservation,
-  assertions: AssertionResult,
-  status: 'VERIFIED' | 'BLOCKED_WITH_REASON',
-  reasonCode: ReasonCode | null,
-  traceId: string,
-): EvidenceBundle {
+export function buildEvidenceBundle(request: ObservationRequest, observation: RevenueCatObservation, assertions: AssertionResult, status: 'VERIFIED' | 'BLOCKED_WITH_REASON', reasonCode: ReasonCode | null, traceId: string): EvidenceBundle {
   const observedAtMs = Date.parse(observation.observedAt);
   const actionTimestampMs = Date.parse(request.actionTimestamp);
   const freshnessDeltaSeconds = (observedAtMs - actionTimestampMs) / 1000;
@@ -30,23 +23,16 @@ export function buildEvidenceBundle(
     },
     observation_data: {
       source: observation.source,
-      httpStatus: observation.httpStatus,
-      rawPayloadHash: observation.rawPayloadHash,
-      observedAt: observation.observedAt,
-      freshnessDeltaSeconds,
-      observedProductIdentifier: observation.entitlement?.productIdentifier ?? null,
-      observedExpiresDate: observation.entitlement?.expiresDate ?? null,
-      observedPurchaseDate: observation.entitlement?.purchaseDate ?? null,
+      http_status: observation.httpStatus,
+      raw_payload_hash: observation.rawPayloadHash,
+      observed_at: observation.observedAt,
+      freshness_delta_seconds: freshnessDeltaSeconds,
+      observed_product_identifier: observation.entitlement?.productIdentifier ?? null,
+      observed_expires_date: observation.entitlement?.expiresDate ?? null,
+      observed_purchase_date: observation.entitlement?.purchaseDate ?? null,
     },
     assertions,
-    verdict: {
-      status,
-      reason_code: reasonCode,
-      evidence_confidence: status === 'VERIFIED' ? 1.0 : 0.0,
-    },
-    integrity: {
-      raw_payload_hash: observation.rawPayloadHash,
-      canonical_signature: '',
-    },
+    verdict: { status, reason_code: reasonCode, evidence_confidence: status === 'VERIFIED' ? 1.0 : 0.0 },
+    integrity: { raw_payload_hash: observation.rawPayloadHash, canonical_signature: '' },
   };
 }
