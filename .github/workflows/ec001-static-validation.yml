@@ -1,6 +1,13 @@
 name: ec001-static-validation
 
 on:
+  push:
+    branches: ['feat/reality-invariant-closed-loop']
+    paths:
+      - 'apps/api/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
   pull_request:
     paths:
       - 'apps/api/**'
