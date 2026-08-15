@@ -5,18 +5,11 @@ import { evaluateAssertions } from './assertions.js';
 import type { ObservationRequest } from './contract.js';
 
 const request: ObservationRequest = {
-  actionId: 'action-1',
-  appUserId: 'user-1',
-  expectedProductIdentifier: 'product.pro',
-  expectedEntitlementId: 'pro',
-  actionTimestamp: '2026-08-15T10:00:00.000Z',
-  freshnessPolicySeconds: 300,
+  actionId: 'action-1', appUserId: 'user-1', expectedProductIdentifier: 'product.pro', expectedEntitlementId: 'pro', actionTimestamp: '2026-08-15T10:00:00.000Z', freshnessPolicySeconds: 300,
 };
 
 describe('IV-001 canonicalization', () => {
-  it('is deterministic regardless of object insertion order', () => {
-    expect(canonicalize({ b: 2, a: 1 })).toBe(canonicalize({ a: 1, b: 2 }));
-  });
+  it('is deterministic regardless of object insertion order', () => expect(canonicalize({ b: 2, a: 1 })).toBe(canonicalize({ a: 1, b: 2 })));
 });
 
 describe('IV-001 reason codes', () => {
@@ -28,30 +21,24 @@ describe('IV-001 reason codes', () => {
 });
 
 describe('IV-001 assertions', () => {
-  it('does not infer active from an arbitrary active field', () => {
+  it('derives active from expiration, never from an arbitrary active field', () => {
     const result = evaluateAssertions(request, {
-      httpStatus: 200,
-      observedAt: '2026-08-15T10:00:10.000Z',
-      rawPayloadHash: 'sha256:test',
-      originalAppUserId: 'user-1',
+      httpStatus: 200, observedAt: '2026-08-15T10:00:10.000Z', rawPayloadHash: 'sha256:test', originalAppUserId: 'user-1',
       entitlement: { entitlementId: 'pro', productIdentifier: 'product.pro', expiresDate: '2026-08-15T11:00:00.000Z', purchaseDate: '2026-08-15T09:59:00.000Z' },
-      reasonCode: null,
-      source: 'https://api.revenuecat.com/v1/subscribers/user-1',
+      reasonCode: null, source: 'https://api.revenuecat.com/v1/subscribers/user-1',
     });
-    expect(result.entitlementActive).toBe(true);
-    expect(result.productIdCorrelation).toBe(true);
+    expect(result.entitlement_active).toBe(true);
+    expect(result.product_id_correlation).toBe(true);
+    expect(result.expiration_policy_compliance).toBe(true);
   });
 
   it('rejects an expired entitlement', () => {
     const result = evaluateAssertions(request, {
-      httpStatus: 200,
-      observedAt: '2026-08-15T10:00:10.000Z',
-      rawPayloadHash: 'sha256:test',
-      originalAppUserId: 'user-1',
+      httpStatus: 200, observedAt: '2026-08-15T10:00:10.000Z', rawPayloadHash: 'sha256:test', originalAppUserId: 'user-1',
       entitlement: { entitlementId: 'pro', productIdentifier: 'product.pro', expiresDate: '2026-08-15T09:00:00.000Z', purchaseDate: null },
-      reasonCode: null,
-      source: 'https://api.revenuecat.com/v1/subscribers/user-1',
+      reasonCode: null, source: 'https://api.revenuecat.com/v1/subscribers/user-1',
     });
-    expect(result.entitlementActive).toBe(false);
+    expect(result.entitlement_active).toBe(false);
+    expect(result.expiration_policy_compliance).toBe(false);
   });
 });
