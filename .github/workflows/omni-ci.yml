@@ -1,4 +1,4 @@
-# omni-ci.yml — advisory review only; no self-modifying execution
+# omni-ci.yml — deterministic validation only
 name: omni-ci
 
 on:
@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 env:
   PNPM_VERSION: '9.15.4'
@@ -26,29 +26,3 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm turbo lint typecheck test build --filter=...
-
-  gemini-review:
-    name: Gemini Review
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' && secrets.GEMINI_API_KEY != '' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/run-gemini-cli@v0
-        with:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          prompt: |
-            Review only the current PR diff. Report concrete security, correctness,
-            concurrency, type-safety, and secret-exposure defects. Do not modify files.
-
-  claude-review:
-    name: Claude Review
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' && secrets.ANTHROPIC_API_KEY != '' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: anthropics/claude-code-action@beta
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          direct_prompt: |
-            Review this PR for production-readiness. Do not modify the repository.
-            Focus on authorization, race conditions, input validation, and secret exposure.
