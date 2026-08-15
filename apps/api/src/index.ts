@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { healthRoutes } from './routes/health.js';
 import { apiRoutes } from './routes/api.js';
+import { authorityRoutes } from './routes/authority.js';
 
 const server = Fastify({
   logger: {
@@ -26,6 +27,7 @@ await server.register(rateLimit, {
 
 await server.register(healthRoutes);
 await server.register(apiRoutes, { prefix: '/api/v1' });
+await server.register(authorityRoutes, { prefix: '/api/v1/authority' });
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';

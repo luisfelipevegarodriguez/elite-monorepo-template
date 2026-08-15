@@ -1,23 +1,18 @@
-# deploy-api.yml v2.1
-# GAPS CORREGIDOS:
-#   - attribute-condition endurecido: solo este repo exacto puede asumir la SA
-#   - path filter incluye packages/** para rebuilds cuando cambian dependencias
-#   - docker buildx para cache de capas entre runs
-#   - Cloud Run flags explícitos: port, timeout, concurrency
-
+# deploy-api.yml — single production deployment authority for the API
 name: deploy-api
+
 on:
   push:
     branches: [main]
     paths:
       - 'apps/api/**'
       - 'packages/**'
-      - 'Dockerfile'
+      - 'apps/api/Dockerfile'
       - '.github/workflows/deploy-api.yml'
 
 permissions:
   contents: read
-  id-token: write   # SOLO lo necesario para OIDC
+  id-token: write
 
 jobs:
   deploy:
@@ -32,15 +27,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'pnpm'
 
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @repo/api build
 
-      - name: Build API
+      - name: Validate immutable runtime secret versions
+        env:
+          DB_VERSION: ${{ secrets.GCP_SECRET_VERSION_DATABASE_URL }}
+          AUTH_VERSION: ${{ secrets.GCP_SECRET_VERSION_AUTHORITY_TOKEN }}
+          RC_VERSION: ${{ secrets.GCP_SECRET_VERSION_REVENUECAT }}
+          SIGN_VERSION: ${{ secrets.GCP_SECRET_VERSION_SIGNING_KEY }}
         run: |
-          TURBO_TOKEN=${{ secrets.TURBO_TOKEN }} \
-          TURBO_TEAM=${{ secrets.TURBO_TEAM }} \
-          pnpm turbo build --filter=api
+          set -euo pipefail
+          for value in "$DB_VERSION" "$AUTH_VERSION" "$RC_VERSION" "$SIGN_VERSION"; do
+            test -n "$value"
+            case "$value" in *latest*|*[!0-9]*) exit 1;; esac
+          done
 
       - id: auth
         name: Auth GCP (OIDC — zero static keys)
@@ -48,36 +50,39 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          # Restricción por repo exacto: ninguna otra accion puede usar esta SA
-          # Se configura en el provider con attribute-condition:
-          # assertion.repository == 'luisfelipevegarodriguez/elite-monorepo-template'
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Set up Docker Buildx (cache entre runs)
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build & Push a Artifact Registry
+      - name: Build and push immutable image
         env:
           REGION: ${{ secrets.GCP_REGION }}
           PROJECT: ${{ secrets.GCP_PROJECT }}
         run: |
-          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/apps/api:${{ github.sha }}"
-          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+          set -euo pipefail
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/elite-monorepo/api:${{ github.sha }}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
           docker buildx build \
-            --cache-from type=registry,ref=${REGION}-docker.pkg.dev/${PROJECT}/apps/api:cache \
-            --cache-to   type=registry,ref=${REGION}-docker.pkg.dev/${PROJECT}/apps/api:cache,mode=max \
             --platform linux/amd64 \
             --push \
             -f apps/api/Dockerfile \
             -t "$IMAGE" .
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Deploy a Cloud Run
+      - name: Deploy with immutable Secret Manager versions
+        env:
+          REGION: ${{ secrets.GCP_REGION }}
+          DB_VERSION: ${{ secrets.GCP_SECRET_VERSION_DATABASE_URL }}
+          AUTH_VERSION: ${{ secrets.GCP_SECRET_VERSION_AUTHORITY_TOKEN }}
+          RC_VERSION: ${{ secrets.GCP_SECRET_VERSION_REVENUECAT }}
+          SIGN_VERSION: ${{ secrets.GCP_SECRET_VERSION_SIGNING_KEY }}
         run: |
-          gcloud run deploy api \
+          set -euo pipefail
+          gcloud run deploy elite-api \
             --image "$IMAGE" \
-            --region ${{ secrets.GCP_REGION }} \
+            --region "$REGION" \
             --platform managed \
             --allow-unauthenticated \
             --port 8080 \
@@ -88,5 +93,20 @@ jobs:
             --min-instances 0 \
             --max-instances 10 \
             --set-env-vars "NODE_ENV=production" \
+            --set-secrets "DATABASE_URL=elite-api-database-url:${DB_VERSION},AUTHORITY_TOKEN=elite-api-authority-token:${AUTH_VERSION},REVENUECAT_SECRET_KEY=elite-api-revenuecat-secret:${RC_VERSION},CANONICAL_SIGNING_KEY=elite-api-canonical-signing-key:${SIGN_VERSION}" \
             --quiet
-          echo "✅ Deploy OK: $(gcloud run services describe api --region=${{ secrets.GCP_REGION }} --format='value(status.url)')"
+
+      - name: Independent runtime observation
+        env:
+          REGION: ${{ secrets.GCP_REGION }}
+        run: |
+          set -euo pipefail
+          URL="$(gcloud run services describe elite-api --region="$REGION" --format='value(status.url)')"
+          test -n "$URL"
+          HEALTH="$(curl --fail --silent --show-error --max-time 10 "$URL/health")"
+          echo "HEALTH=$HEALTH"
+          echo "$HEALTH" | grep -q '"status":"ok"'
+          READY_HTTP="$(curl --silent --show-error --max-time 10 -o /tmp/ready.json -w '%{http_code}' "$URL/ready")"
+          cat /tmp/ready.json
+          test "$READY_HTTP" = "200"
+          grep -q '"status":"ready"' /tmp/ready.json
