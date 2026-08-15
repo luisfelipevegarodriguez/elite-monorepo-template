@@ -31,6 +31,19 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm --filter @repo/api build
 
+      - name: Validate immutable runtime secret versions
+        env:
+          DB_VERSION: ${{ secrets.GCP_SECRET_VERSION_DATABASE_URL }}
+          AUTH_VERSION: ${{ secrets.GCP_SECRET_VERSION_AUTHORITY_TOKEN }}
+          RC_VERSION: ${{ secrets.GCP_SECRET_VERSION_REVENUECAT }}
+          SIGN_VERSION: ${{ secrets.GCP_SECRET_VERSION_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          for value in "$DB_VERSION" "$AUTH_VERSION" "$RC_VERSION" "$SIGN_VERSION"; do
+            test -n "$value"
+            case "$value" in *latest*|*[!0-9]*) exit 1;; esac
+          done
+
       - id: auth
         name: Auth GCP (OIDC — zero static keys)
         uses: google-github-actions/auth@v2
@@ -48,6 +61,7 @@ jobs:
           REGION: ${{ secrets.GCP_REGION }}
           PROJECT: ${{ secrets.GCP_PROJECT }}
         run: |
+          set -euo pipefail
           IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/elite-monorepo/api:${{ github.sha }}"
           gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
           docker buildx build \
@@ -57,10 +71,15 @@ jobs:
             -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      - name: Deploy with Secret Manager-backed runtime secrets
+      - name: Deploy with immutable Secret Manager versions
         env:
           REGION: ${{ secrets.GCP_REGION }}
+          DB_VERSION: ${{ secrets.GCP_SECRET_VERSION_DATABASE_URL }}
+          AUTH_VERSION: ${{ secrets.GCP_SECRET_VERSION_AUTHORITY_TOKEN }}
+          RC_VERSION: ${{ secrets.GCP_SECRET_VERSION_REVENUECAT }}
+          SIGN_VERSION: ${{ secrets.GCP_SECRET_VERSION_SIGNING_KEY }}
         run: |
+          set -euo pipefail
           gcloud run deploy elite-api \
             --image "$IMAGE" \
             --region "$REGION" \
@@ -74,17 +93,20 @@ jobs:
             --min-instances 0 \
             --max-instances 10 \
             --set-env-vars "NODE_ENV=production" \
-            --set-secrets "DATABASE_URL=elite-api-database-url:latest,AUTHORITY_TOKEN=elite-api-authority-token:latest,REVENUECAT_SECRET_KEY=elite-api-revenuecat-secret:latest,CANONICAL_SIGNING_KEY=elite-api-canonical-signing-key:latest" \
+            --set-secrets "DATABASE_URL=elite-api-database-url:${DB_VERSION},AUTHORITY_TOKEN=elite-api-authority-token:${AUTH_VERSION},REVENUECAT_SECRET_KEY=elite-api-revenuecat-secret:${RC_VERSION},CANONICAL_SIGNING_KEY=elite-api-canonical-signing-key:${SIGN_VERSION}" \
             --quiet
 
       - name: Independent runtime observation
         env:
           REGION: ${{ secrets.GCP_REGION }}
         run: |
+          set -euo pipefail
           URL="$(gcloud run services describe elite-api --region="$REGION" --format='value(status.url)')"
           test -n "$URL"
           HEALTH="$(curl --fail --silent --show-error --max-time 10 "$URL/health")"
           echo "HEALTH=$HEALTH"
           echo "$HEALTH" | grep -q '"status":"ok"'
-          READY="$(curl --silent --show-error --max-time 10 -w '\n%{http_code}' "$URL/ready")"
-          echo "READY=$READY"
+          READY_HTTP="$(curl --silent --show-error --max-time 10 -o /tmp/ready.json -w '%{http_code}' "$URL/ready")"
+          cat /tmp/ready.json
+          test "$READY_HTTP" = "200"
+          grep -q '"status":"ready"' /tmp/ready.json
