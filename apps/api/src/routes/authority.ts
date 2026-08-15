@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import type { FastifyInstance } from 'fastify';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   getAction,
   registerIntent,
@@ -16,8 +16,32 @@ interface RegisterBody {
   independentVerifierId?: string;
 }
 
+function requireAuthorityToken(request: FastifyRequest, reply: FastifyReply, done: () => void): void {
+  const configured = process.env.AUTHORITY_TOKEN;
+  const presented = request.headers.authorization?.startsWith('Bearer ')
+    ? request.headers.authorization.slice('Bearer '.length)
+    : '';
+
+  if (!configured || !presented) {
+    reply.code(503).send({ status: 'BLOCKED_WITH_REASON', reason: 'AUTHORITY_NOT_CONFIGURED' });
+    return;
+  }
+
+  const configuredBytes = Buffer.from(configured);
+  const presentedBytes = Buffer.from(presented);
+  const valid = configuredBytes.length === presentedBytes.length
+    && timingSafeEqual(configuredBytes, presentedBytes);
+
+  if (!valid) {
+    reply.code(401).send({ status: 'BLOCKED_WITH_REASON', reason: 'AUTHORITY_UNAUTHORIZED' });
+    return;
+  }
+
+  done();
+}
+
 export async function authorityRoutes(server: FastifyInstance): Promise<void> {
-  server.post<{ Body: RegisterBody }>('/actions', async (request, reply) => {
+  server.post<{ Body: RegisterBody }>('/actions', { preHandler: requireAuthorityToken }, async (request, reply) => {
     const body = request.body;
     const expected = body.expectedEffect;
 
@@ -43,7 +67,7 @@ export async function authorityRoutes(server: FastifyInstance): Promise<void> {
     return reply.code(201).send(state);
   });
 
-  server.get<{ Params: { actionId: string } }>('/actions/:actionId', async (request, reply) => {
+  server.get<{ Params: { actionId: string } }>('/actions/:actionId', { preHandler: requireAuthorityToken }, async (request, reply) => {
     const state = await getAction(request.params.actionId);
     if (!state) return reply.code(404).send({ status: 'BLOCKED_WITH_REASON', reason: 'ACTION_NOT_FOUND' });
     return state;
@@ -51,6 +75,7 @@ export async function authorityRoutes(server: FastifyInstance): Promise<void> {
 
   server.post<{ Params: { actionId: string } }>(
     '/actions/:actionId/verify/github-commit',
+    { preHandler: requireAuthorityToken },
     async (request, reply) => {
       const state = await getAction(request.params.actionId);
       if (!state) return reply.code(404).send({ status: 'BLOCKED_WITH_REASON', reason: 'ACTION_NOT_FOUND' });
