@@ -11,7 +11,7 @@
     "test": "turbo run test",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
-    "ci": "turbo run lint typecheck test build --filter=...[origin/main]"
+    "ci": "turbo run lint typecheck test build"
   },
   "devDependencies": {
     "turbo": "^2.5.4",
