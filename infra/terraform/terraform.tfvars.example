@@ -1,0 +1,4 @@
+project_id     = "mi-proyecto-gcp-123456"
+region         = "europe-west1"
+github_repo    = "luisfelipevegarodriguez/elite-monorepo-template"
+tfstate_bucket = "mi-proyecto-tfstate"

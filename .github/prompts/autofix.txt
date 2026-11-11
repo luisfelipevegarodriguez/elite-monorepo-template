@@ -1,0 +1,6 @@
+You are working in a Node.js / TypeScript project with GitHub Actions CI.
+Read the repository carefully. Identify why the last CI run failed.
+Apply the minimal change needed to make all tests and lint checks pass.
+Do NOT refactor unrelated code. Do NOT change dependencies unless strictly necessary.
+After fixing, re-run the test command to verify.
+Stop once all checks pass.
