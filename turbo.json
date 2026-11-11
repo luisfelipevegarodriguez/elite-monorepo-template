@@ -20,8 +20,7 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "inputs": ["**/*.ts", "**/*.tsx", "**/*.test.*", "vitest.config.*"],
-      "outputs": ["coverage/**"]
+      "inputs": ["**/*.ts", "**/*.tsx", "**/*.test.*", "vitest.config.*"]
     },
     "dev": {
       "cache": false,

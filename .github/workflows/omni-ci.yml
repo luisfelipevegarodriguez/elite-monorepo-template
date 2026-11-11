@@ -3,7 +3,7 @@
 #   - OIDC attribute-condition endurecido por repo exacto
 #   - fetch-depth:0 solo en job ci (los demás no lo necesitan)
 #   - autofix.ci pinado por hash verificado
-#   - turbo --filter=...[origin/main] solo en push (en PR usa --filter=...)
+#   - en push a main no se usa --filter=...[origin/main]: ese rango está vacío y turbo reporta 0 tasks
 #   - codex-autofix dispara con workflow_run para no bloquear el job ci
 
 name: omni-ci
@@ -46,10 +46,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Turbo lint + typecheck + test + build (solo afectados)
+      - name: Turbo lint + typecheck + test + build
         run: |
-          FILTER="--filter=...[origin/main]"
-          pnpm turbo lint typecheck test build $FILTER --concurrency=4
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            pnpm turbo lint typecheck test build --filter=...[origin/main] --concurrency=4
+          else
+            pnpm turbo lint typecheck test build --concurrency=4
+          fi
 
       - name: ESLint --fix + Prettier (para autofix.ci)
         run: |

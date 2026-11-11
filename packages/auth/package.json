@@ -6,7 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": { "lint": "eslint src --max-warnings=0" },
   "dependencies": {
-    "better-auth": "^1.2.0",
+    "better-auth": "1.7.20",
     "@repo/db": "workspace:*"
   },
   "devDependencies": {

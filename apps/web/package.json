@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint src --max-warnings=0",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
@@ -16,13 +17,14 @@
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
+    "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^25.9.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^6.0.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "jsdom": "^25.0.1",
     "tailwindcss": "^4.0.0",
-    "@tailwindcss/postcss": "^4.0.0",
-    "vitest": "^4.1.6",
-    "@vitejs/plugin-react": "^6.0.2"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   }
 }
