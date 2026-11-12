@@ -55,7 +55,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
 
       - name: Set up Docker Buildx (cache entre runs)
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build & Push a Artifact Registry
         env:
