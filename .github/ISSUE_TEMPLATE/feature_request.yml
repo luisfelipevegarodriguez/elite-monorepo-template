@@ -1,0 +1,46 @@
+name: Cambio
+description: Propuesta pequeña y verificable, dentro del plan gratis
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Qué problema resuelve
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Propuesta
+      description: Un cambio coherente. Indica el workspace (`apps/web`, `apps/api` o `packages/*`).
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Límites
+      description: Este template se mantiene sin coste.
+      options:
+        - label: Cabe en Vercel Hobby (gratis) y no pide un servicio de pago
+          required: true
+        - label: No requiere commitear secretos ni credenciales
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - apps/web (@repo/web)
+        - apps/api (@repo/api)
+        - packages/ui
+        - packages/db
+        - packages/auth
+        - packages/onchain
+        - packages/queue
+        - packages/config-eslint
+        - Tooling / docs
+        - Otra
+    validations:
+      required: true

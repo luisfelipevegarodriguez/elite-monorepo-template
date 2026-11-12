@@ -1,0 +1,54 @@
+name: Bug
+description: Algo del monorepo falla o no se comporta como está escrito
+title: "fix: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Qué pasa
+      description: Comportamiento observado, con el workspace afectado (`@repo/web`, `@repo/api`, u otro).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Qué esperabas
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Cómo reproducirlo
+      description: Pasos, comando y versión de Node. El gestor del repo es pnpm 9.15.4.
+      placeholder: |
+        1. pnpm install --frozen-lockfile
+        2. pnpm --filter @repo/web dev
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - apps/web (@repo/web)
+        - apps/api (@repo/api)
+        - packages/ui
+        - packages/db
+        - packages/auth
+        - packages/onchain
+        - packages/queue
+        - packages/config-eslint
+        - CI / GitHub
+        - Otra
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Comandos que ya corriste
+      description: Si llegaste a lanzarlos, pega la salida relevante de `pnpm lint`, `pnpm typecheck`, `pnpm test` o `pnpm build`. No pegues secretos.
+    validations:
+      required: false

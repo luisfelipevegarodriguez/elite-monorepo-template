@@ -1,3 +1,5 @@
+# pnpm-lock.yaml único en la raíz: el ecosistema npm cubre todos los workspaces.
+# minor y patch van agrupados; un major queda en su propio PR.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -10,10 +12,25 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
+        update-types:
+          - minor
+          - patch
       prod-dependencies:
         dependency-type: production
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
       day: monday
+      time: "09:00"
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
