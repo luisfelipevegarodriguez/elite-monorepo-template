@@ -11,7 +11,7 @@
   "dependencies": {
     "bullmq": "^6.0.2",
     "@upstash/redis": "^1.34.0",
-    "ioredis": "^5.4.0"
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
