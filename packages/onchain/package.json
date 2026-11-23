@@ -10,9 +10,9 @@
   },
   "scripts": { "lint": "eslint src --max-warnings=0" },
   "dependencies": {
-    "viem": "^2.21.0",
+    "viem": "^2.58.2",
     "@aave/contract-helpers": "^1.22.0",
-    "@morpho-org/morpho-ts": "^4.2.0"
+    "@morpho-org/morpho-ts": "^4.4.0"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
