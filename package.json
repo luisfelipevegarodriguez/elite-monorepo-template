@@ -14,9 +14,9 @@
     "ci": "turbo run lint typecheck test build"
   },
   "devDependencies": {
-    "turbo": "^2.5.4",
-    "prettier": "^3.5.3",
-    "eslint": "^10.4.0",
+    "turbo": "^2.11.13",
+    "prettier": "^3.10.1",
+    "eslint": "^10.15.0",
     "typescript": "^6.0.3"
   },
   "workspaces": [
